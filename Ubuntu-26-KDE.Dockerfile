@@ -15,28 +15,38 @@ ARG ENABLE_docker_ARG
 ARG ENABLE_srf_ARG
 ARG ENABLE_tmoe_ARG
 ARG ENABLE_anland_kde_ARG
+ARG ENABLE_8gen2_wayland_ARG
 ARG ENABLE_nosnap_ARG
+ARG ENABLE_systemd257_ARG
 ARG USERNAME
 ######################################################
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# 启用 APT 并行连接、HTTP(S) pipeline 和下载重试
+RUN printf '%s\n' \
+    'Acquire::Queue-Mode "host";' \
+    'Acquire::http::Pipeline-Depth "10";' \
+    'Acquire::https::Pipeline-Depth "10";' \
+    'Acquire::Retries "3";' \
+    > /etc/apt/apt.conf.d/99parallel-downloads
+
 # 优先复制自定义脚本
 COPY scripts/download-firmware /usr/local/bin/
 COPY scripts/nosnap.sh /usr/local/sbin/nosnap
+COPY scripts/systemd257.sh /usr/local/sbin/systemd257
 
 # 将自定义的 bashrc 脚本复制到根文件系统的 profile 目录
 COPY scripts/bashrc.sh /etc/profile.d/ds-aliases.sh
 
-# 修复骁龙8gen2设备在Wayland的花屏问题
-COPY scripts/enable_tp_ubwc.sh /etc/profile.d/enable_tp_ubwc.sh
+# 通用 Droidspaces USB Manager 安装器
+COPY scripts/install-usb-manager.sh /usr/local/sbin/install-droidspaces-usb-manager
 
 # 复制本仓库内预编译的 anland_kde deb 包
-COPY anland-build/ubuntu2604/kwin/*.deb /tmp/anland-build/ubuntu2604/kwin/
-COPY anland-build/ubuntu2604/xwayland/*.deb /tmp/anland-build/ubuntu2604/xwayland/
+COPY anland-build/ubuntu2604/*.deb /tmp/anland-build/ubuntu2604/
 
 # 赋予相关脚本可执行权限
-RUN chmod +x /usr/local/bin/download-firmware /usr/local/sbin/nosnap /etc/profile.d/ds-aliases.sh /etc/profile.d/enable_tp_ubwc.sh
+RUN chmod +x /usr/local/bin/download-firmware /usr/local/sbin/nosnap /etc/profile.d/ds-aliases.sh
 
 RUN sed -i 's/Components: main/Components: main restricted universe multiverse/g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
     sed -i 's/main/main restricted universe multiverse/g' /etc/apt/sources.list 2>/dev/null && \
@@ -55,7 +65,7 @@ RUN sed -i 's/Components: main/Components: main restricted universe multiverse/g
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     # 核心工具组件
-    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates locales bash-completion udev dbus systemd-sysv systemd-resolved fastfetch pciutils \
+    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates locales bash-completion udev dbus systemd-sysv systemd-resolved fastfetch \
     # 用户请求的基础开发/编辑工具
     git nano sudo \
     # 网络与 SSH 工具
@@ -80,7 +90,7 @@ RUN apt-get update && \
         apt-get install -y --no-install-recommends \
         dbus-x11 x11-xserver-utils fonts-noto-cjk fonts-noto-color-emoji kde-plasma-desktop kubuntu-settings-desktop kubuntu-wallpapers \
         pipewire pipewire-pulse wireplumber powerdevil kscreen plasma-pa ark kwin-x11 upower konsole \
-        dolphin kate kinfocenter mesa-utils pulseaudio-utils vulkan-tools dbus-user-session aha clinfo dmidecode libdisplay-info-bin pciutils wayland-utils xserver-xorg \
+        dolphin kate kinfocenter mesa-utils pulseaudio-utils vulkan-tools dbus-user-session aha clinfo dmidecode libdisplay-info-bin wayland-utils xserver-xorg \
         kfind plasma-systemmonitor filelight glmark2 vkmark systemsettings kde-config-screenlocker kio-extras xdg-user-dirs dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers \
         kimageformat6-plugins plasma-browser-integration libcanberra-pulse gstreamer1.0-plugins-base gstreamer1.0-plugins-good sound-theme-freedesktop \
         polkit-kde-agent-1 libpam-systemd libpam-modules libpam-kwallet5 plasma-session-x11 language-pack-kde-zh-hans language-pack-zh-hans qt6-translations-l10n; \
@@ -104,11 +114,9 @@ RUN apt-get update && \
     if [ "$ENABLE_anland_kde_ARG" = "true" ] && [ "$BUILD_KDE" != "none" ]; then \
         echo "--> [开启] 正在安装 anland_kde..." && \
         echo "--> [开启] 正在安装预编译的 kwin deb 包..." && \
-        dpkg -i /tmp/anland-build/ubuntu2604/kwin/*.deb || apt-get install -f -y && \
-        echo "--> [开启] 正在安装预编译的 xwayland deb 包..." && \
-        dpkg -i /tmp/anland-build/ubuntu2604/xwayland/*.deb || apt-get install -f -y && \
+        dpkg -i /tmp/anland-build/ubuntu2604/*.deb || apt-get install -f -y && \
         echo "--> [开启] 设置预编译 deb 包为 hold 模式，防止被 apt 更新覆盖..." && \
-        for f in /tmp/anland-build/ubuntu2604/kwin/*.deb /tmp/anland-build/ubuntu2604/xwayland/*.deb; do \
+        for f in /tmp/anland-build/ubuntu2604/*.deb; do \
             pkgname=$(dpkg-deb -f "$f" Package) && \
             apt-mark hold "$pkgname" && \
             echo "    hold: $pkgname"; \
@@ -178,6 +186,9 @@ RUN sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && \
     useradd -m -s /bin/bash -G shadow ${USERNAME} && echo "${USERNAME}:1234" | chpasswd && \
     systemctl enable ssh
 
+# 为所有 Ubuntu RootFS 安装 Droidspaces USB Manager
+RUN /usr/local/sbin/install-droidspaces-usb-manager --user "${USERNAME}"
+
 
 # 添加环境变量
 RUN cat <<'EOF' > /etc/environment
@@ -188,7 +199,6 @@ RUN if [ "$ENABLE_anland_kde_ARG" != "true" ] ; then \
         echo "DISPLAY=:5" >> /etc/environment; \
     else \
         echo "WAYLAND_DISPLAY=wayland-0" >> /etc/environment; \
-        echo "DISPLAY=:0" >> /etc/environment; \
         echo "QT_QPA_PLATFORM=wayland" >> /etc/environment; \
         echo "ANLAND=1" >> /etc/environment; \
         echo "ANLAND_SOCKET=/run/display.sock" >> /etc/environment; \
@@ -196,6 +206,11 @@ RUN if [ "$ENABLE_anland_kde_ARG" != "true" ] ; then \
         echo "MESA_LOADER_DRIVER_OVERRIDE=kgsl" >> /etc/environment; \
         echo "GALLIUM_DRIVER=kgsl" >> /etc/environment; \
         echo "FD_FORCE_KGSL=1" >> /etc/environment; \
+    fi
+
+# 修复骁龙8 Gen 2 设备在 Wayland 下的花屏问题
+RUN if [ "$ENABLE_8gen2_wayland_ARG" = "true" ]; then \
+        echo "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1" >> /etc/environment; \
     fi
 
 # 音频选择
@@ -212,6 +227,7 @@ RUN if [ "$PulseAudio" = "socket" ]; then \
 
 
 # 输入法开机自启动及 KDE 配置
+COPY scripts/start/ /tmp/droidspaces-start/
 RUN <<'EOF_RUN'
     if [ "$ENABLE_srf_ARG" = "true" ]; then
     mkdir -p /home/${USERNAME}/.config/autostart
@@ -254,71 +270,23 @@ EOF
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
     # KDE X11 自启动
     if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "false" ] && [ "$BUILD_KDE" != "mobile" ] ; then
-    cat <<EOF > /etc/systemd/system/plasma-x11.service
-[Unit]
-Description=Start Plasma X11
-After=network.target display-manager.service
-
-[Service]
-Type=simple
-User=${USERNAME}
-EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -lc 'DISPLAY=:5 startplasma-x11'
-Restart=no
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    install -Dm644 /tmp/droidspaces-start/plasma-x11.service /etc/systemd/system/plasma-x11.service
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service
     fi
     # KDE mobile 自启动
     if [ "$BUILD_KDE_plus" = "true" ] && [ "$BUILD_KDE" = "mobile" ] ; then
-    cat <<EOF > /etc/systemd/system/plasma-mobile.service
-[Unit]
-Description=Start Plasma Mobile
-After=network.target display-manager.service
-
-[Service]
-Type=simple
-User=${USERNAME}
-Group=${USERNAME}
-PAMName=login
-
-EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -lc 'startplasmamobile'
-Restart=no
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    install -Dm644 /tmp/droidspaces-start/plasma-mobile.service /etc/systemd/system/plasma-mobile.service
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-mobile.service /etc/systemd/system/multi-user.target.wants/plasma-mobile.service
     fi
     # KDE wayland 自启动
     if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "true" ] && [ "$BUILD_KDE" != "mobile" ] ; then
-    cat <<EOF > /etc/systemd/system/plasma-wayland.service
-[Unit]
-Description=Start Plasma Wayland
-After=network.target display-manager.service
-
-[Service]
-Type=simple
-User=${USERNAME}
-Group=${USERNAME}
-PAMName=login
-
-EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -lc 'startplasma-wayland'
-Restart=no
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    install -Dm644 /tmp/droidspaces-start/plasma-wayland.service /etc/systemd/system/plasma-wayland.service
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-wayland.service /etc/systemd/system/multi-user.target.wants/plasma-wayland.service
     fi
-
+    rm -rf /tmp/droidspaces-start
 EOF_RUN
 
 # Mesa 驱动适配
@@ -488,6 +456,14 @@ RUN if [ "$ENABLE_binfmt_ARG" = "true" ]; then \
     else \
         rm -f /usr/local/bin/qemu-binfmt-register.sh /etc/systemd/system/qemu-binfmt-register.service; \
     fi
+
+# 可选：为 Ubuntu 26.04 的旧 Android 内核运行环境构建 systemd 257。
+RUN if [ "$ENABLE_systemd257_ARG" = "true" ]; then \
+        bash /usr/local/sbin/systemd257; \
+    else \
+        echo "--> [跳过] 未启用 systemd 257 旧内核兼容"; \
+    fi && \
+    rm -f /usr/local/sbin/systemd257
 
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/*

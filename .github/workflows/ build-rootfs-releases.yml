@@ -14,6 +14,7 @@ on:
           - 'Ubuntu-25-KDE'
           - 'Ubuntu-26-KDE'
           - 'Fedora-43-KDE'
+          - 'Fedora-44-KDE'
           - 'Arch-KDE'
           - 'all'
           - 'all-wayland'
@@ -36,9 +37,9 @@ on:
         description: 'KDE 桌面开机自启动 (需要 KDE 桌面选择为 conc、min 或 mobile)'
         required: true
         type: boolean
-        default: false
+        default: true
       enable_anland_kde:
-        description: 'Wayland 支持（支持 Debian-13、Ubuntu-26、Fedora-43,选择 mobile 强制 wayland）'
+        description: 'Wayland 支持（支持 Debian-13、Ubuntu-26、Fedora-43/44,选择 mobile 强制 wayland）'
         required: true
         type: boolean
         default: false
@@ -61,6 +62,11 @@ on:
         required: true
         type: boolean
         default: true
+      enable_8gen2_wayland:
+        description: '修复 8Gen2 Wayland 花屏'
+        required: true
+        type: boolean
+        default: false
       enable_tmoe:
         description: '集成 TMOE '
         required: true
@@ -68,6 +74,11 @@ on:
         default: true
       nosnap:
         description: 'nosnap: 干掉 Ubuntu 的 Snap'
+        required: true
+        type: boolean
+        default: false
+      enable_systemd257:
+        description: '旧内核兼容：在 systemd 高于 257 时构建并使用 systemd 257'
         required: true
         type: boolean
         default: false
@@ -140,7 +151,7 @@ jobs:
               WAYLAND_PACKAGE_TARGET="all"
               ;;
             all-wayland)
-              TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-26-KDE","Fedora-43-KDE"]')
+              TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-26-KDE","Fedora-43-KDE","Fedora-44-KDE"]')
               ENABLE_ANLAND_KDE="true"
               WAYLAND_PACKAGE_TARGET="all"
               ;;
@@ -156,13 +167,17 @@ jobs:
               TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
               WAYLAND_PACKAGE_TARGET="Fedora43"
               ;;
+            Fedora-44-KDE)
+              TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
+              WAYLAND_PACKAGE_TARGET="Fedora44"
+              ;;
             *)
               TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
               ;;
           esac
 
-          if [ "$BUILD_KDE" = "mobile" ] && [ "$TARGET" != "Ubuntu-26-KDE" ] && [ "$TARGET" != "Debian-13-KDE" ] && [ "$TARGET" != "Fedora-43-KDE" ]; then
-            echo "错误: 移动版 KDE 目前支持 Ubuntu-26-KDE、Debian-13-KDE、Fedora-43-KDE" >&2
+          if [ "$BUILD_KDE" = "mobile" ] && [ "$TARGET" != "Ubuntu-26-KDE" ] && [ "$TARGET" != "Debian-13-KDE" ] && [ "$TARGET" != "Fedora-43-KDE" ] && [ "$TARGET" != "Fedora-44-KDE" ] && [ "$TARGET" != "all-wayland" ]; then
+            echo "错误: 移动版 KDE 目前支持 Ubuntu-26-KDE、Debian-13-KDE、Fedora-43-KDE、Fedora-44-KDE、all-wayland" >&2
             exit 1
           fi
 
@@ -182,7 +197,7 @@ jobs:
           fi
 
           if [ "$BUILD_WAYLAND_PACKAGES" = "true" ] && [ -z "$WAYLAND_PACKAGE_TARGET" ]; then
-            echo "错误: KDE Wayland 预编译包仅支持 Debian-13-KDE、Ubuntu-26-KDE、Fedora-43-KDE、all 或 all-wayland" >&2
+            echo "错误: KDE Wayland 预编译包仅支持 Debian-13-KDE、Ubuntu-26-KDE、Fedora-43-KDE、Fedora-44-KDE、all 或 all-wayland" >&2
             exit 1
           fi
           
@@ -311,6 +326,8 @@ jobs:
             -h "${{ inputs.enable_srf }}" \
             -j "${{ inputs.enable_tmoe }}" \
             -n "${{ inputs.nosnap }}" \
+            -S "${{ inputs.enable_systemd257 }}" \
+            -t "${{ inputs.enable_8gen2_wayland }}" \
             -A "${{ needs.setup.outputs.wayland_enabled }}" \
             -u "${{ inputs.custom_username }}"
 
@@ -373,8 +390,10 @@ jobs:
             - PulseAudio 音频转发: ${{ needs.setup.outputs.pulseaudio_effective }}
             - anland 音频说明: Wayland 模式下使用 anland app 自带音频，无需 PulseAudio
             - nosnap: ${{ github.event.inputs.nosnap }}
+            - systemd 257 旧内核兼容: ${{ github.event.inputs.enable_systemd257 }}
             - 使用中文作为主语言: ${{ github.event.inputs.enable_zh_tz }}
             - 高通骁龙 GPU 支持: ${{ github.event.inputs.enable_mesa }}
+            - 修复 8Gen2 Wayland 花屏: ${{ github.event.inputs.enable_8gen2_wayland }}
             - 集成 TMOE : ${{ github.event.inputs.enable_tmoe }}
             - 输入法 fcitx5 支持: ${{ github.event.inputs.enable_srf }}
             - 跨架构支持: ${{ github.event.inputs.enable_binfmt }}

@@ -14,9 +14,12 @@ ARG ENABLE_zip_ARG
 ARG ENABLE_docker_ARG
 ARG ENABLE_srf_ARG
 ARG ENABLE_tmoe_ARG
+ARG ENABLE_systemd257_ARG
 ARG USERNAME
 ######################################################
 
+COPY scripts/install-usb-manager.sh /usr/local/sbin/install-droidspaces-usb-manager
+COPY scripts/systemd257.sh /usr/local/sbin/systemd257
 
 RUN sed -i '/^#ParallelDownloads/s/^#//' /etc/pacman.conf && \
     sed -i '/NoExtract.*locale/d' /etc/pacman.conf && \
@@ -25,7 +28,7 @@ RUN sed -i '/^#ParallelDownloads/s/^#//' /etc/pacman.conf && \
     pacman -Su --noconfirm && \
     pacman -S --noconfirm --needed \
     # 核心工具组件 
-    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates bash-completion dbus systemd fastfetch logrotate \
+    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates bash-completion dbus systemd pam fastfetch logrotate \
     # 用户请求的基础开发/编辑工具
     git nano sudo \
     # 网络与 SSH 工具
@@ -45,7 +48,7 @@ RUN sed -i '/^#ParallelDownloads/s/^#//' /etc/pacman.conf && \
     if [ "$BUILD_KDE" = "conc" ]; then \
         pacman -S --noconfirm --needed \
         xorg-xrandr noto-fonts-cjk noto-fonts-emoji plasma-desktop pipewire pipewire-pulse wireplumber powerdevil kscreen plasma-pa ark kwin kwin-x11 upower konsole \
-        dolphin kate kinfocenter mesa-utils libpulse vulkan-tools aha clinfo dmidecode pciutils wayland-utils xorg-server \
+        dolphin kate kinfocenter mesa-utils libpulse vulkan-tools aha clinfo dmidecode wayland-utils xorg-server \
         kfind plasma-systemmonitor filelight glmark2 vkmark systemsettings kscreenlocker kio-extras xdg-user-dirs dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers \
         kimageformats plasma-browser-integration libcanberra gstreamer gst-plugins-base gst-plugins-good sound-theme-freedesktop chromium; \
     fi && \
@@ -107,21 +110,26 @@ RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
     useradd -m -s /bin/bash ${USERNAME} && echo "${USERNAME}:1234" | chpasswd && \
     systemctl enable sshd
 
+# 为所有 Arch RootFS 安装 Droidspaces USB Manager
+RUN /usr/local/sbin/install-droidspaces-usb-manager --user "${USERNAME}"
 
-# 添加环境变量 (注意每个变量前都加了 export)
-RUN cat <<'EOF' > /etc/profile.d/custom_env.sh
-export XCURSOR_SIZE=48
-export DISPLAY=:5
+# 修复 Arch 登入shell没法读取 /etc/environment 环境变量的问题
+RUN echo 'session  required  pam_env.so' >> /etc/pam.d/su-l
+
+# 添加环境变量
+RUN cat <<'EOF' > /etc/environment
+XCURSOR_SIZE=48
+DISPLAY=:5
 EOF
 # 音频选择
 RUN if [ "$PulseAudio" = "socket" ]; then \
-        echo "export PULSE_SERVER=unix:/tmp/.pulse-socket" >> /etc/profile.d/custom_env.sh; \
+        echo "PULSE_SERVER=unix:/tmp/.pulse-socket" >> /etc/environment; \
     elif [ "$PulseAudio" = "tcp" ]; then \
-        echo "export PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/profile.d/custom_env.sh; \
+        echo "PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/environment; \
     fi
-RUN chmod +x /etc/profile.d/custom_env.sh
 
 # 输入法与 KDE 开机自启动配置
+COPY scripts/start/ /tmp/droidspaces-start/
 RUN <<'EOF_RUN'
     if [ "$ENABLE_srf_ARG" = "true" ]; then
     mkdir -p /home/${USERNAME}/.config/autostart
@@ -138,18 +146,18 @@ Categories=System;Utility;
 StartupNotify=false
 NoDisplay=true
 EOF
-    cat <<'EOF' >> /etc/profile.d/custom_env.sh
-export XMODIFIERS=@im=fcitx5
-export GTK_IM_MODULE=fcitx5
-export QT_IM_MODULE=fcitx5
-export SDL_IM_MODULE=fcitx5
-export GLFW_IM_MODULE=fcitx
+    cat <<'EOF' >> /etc/environment
+XMODIFIERS=@im=fcitx5
+GTK_IM_MODULE=fcitx5
+QT_IM_MODULE=fcitx5
+SDL_IM_MODULE=fcitx5
+GLFW_IM_MODULE=fcitx
 EOF
 fi
     if [ "$ENABLE_mesa_ARG" = "true" ] ; then
-        cat <<'EOF' >> /etc/profile.d/custom_env.sh
-export MESA_LOADER_DRIVER_OVERRIDE=kgsl
-export TU_DEBUG=noconform
+        cat <<'EOF' >> /etc/environment
+MESA_LOADER_DRIVER_OVERRIDE=kgsl
+TU_DEBUG=noconform
 EOF
     fi
     echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/${USERNAME}/.bashrc
@@ -161,33 +169,12 @@ Enabled=false
 EOF
     fi
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
-    if [ "$BUILD_KDE" = "conc" ] || [ "$BUILD_KDE" = "min" ] ; then
-    cat <<'EOF' > /usr/local/bin/startplasma-x11
-#!/bin/bash
-exec dbus-run-session /usr/bin/startplasma-x11 "$@"
-EOF
-    chmod +x /usr/local/bin/startplasma-x11
-    fi
     if [ "$BUILD_KDE_plus" = "true" ] ; then
-    cat <<EOF > /etc/systemd/system/plasma-x11.service
-[Unit]
-Description=Start Plasma X11
-After=network.target display-manager.service
-
-[Service]
-Type=simple
-User=${USERNAME}
-EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -lc 'DISPLAY=:5 startplasma-x11'
-Restart=no
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    install -Dm644 /tmp/droidspaces-start/plasma-x11.service /etc/systemd/system/plasma-x11.service
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service
     fi
+    rm -rf /tmp/droidspaces-start
 EOF_RUN
 
 # 下载并安装 Mesa
@@ -358,6 +345,14 @@ RUN if [ "$ENABLE_binfmt_ARG" = "true" ]; then \
     else \
         rm -f /usr/local/bin/qemu-binfmt-register.sh /etc/systemd/system/qemu-binfmt-register.service; \
     fi
+
+# 可选：为 systemd 258+ 发行版构建 systemd 257 旧内核兼容运行时。
+RUN if [ "$ENABLE_systemd257_ARG" = "true" ]; then \
+        bash /usr/local/sbin/systemd257; \
+    else \
+        echo "--> [跳过] 未启用 systemd 257 旧内核兼容"; \
+    fi && \
+    rm -f /usr/local/sbin/systemd257
 
 # 彻底清理 pacman 缓存
 RUN rm -rf /var/cache/pacman/pkg/* /var/lib/pacman/sync/*

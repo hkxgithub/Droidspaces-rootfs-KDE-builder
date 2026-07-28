@@ -1,14 +1,15 @@
 #!/bin/bash
 : "${VERSION:=dev}"
-DATE=$(date +%Y%m%d)      # 获取当前日期
-TARGET_ARCH="arm64"       # 目标编译架构固定为 arm64
+TARGET_ARCH="aarch64"     # 产物命名使用的目标架构
 PLATFORM="linux/arm64"    # Docker buildx 的平台参数
 
 ENABLE_binfmt="false"
 BUILD_KDE_plus="false"
 ENABLE_nosnap="false"
+ENABLE_8gen2_wayland="false"
+ENABLE_systemd257="false"
 # 解析输入参数 (-i 指定 Dockerfile，-v 指定版本号)
-while getopts "i:v:K:L:P:a:b:c:d:e:f:g:h:j:n:u:A:" opt; do
+while getopts "i:v:K:L:P:a:b:c:d:e:f:g:h:j:n:S:t:u:A:" opt; do
   case $opt in
     i) DOCKERFILE="$OPTARG" ;; 
     v) VERSION="$OPTARG" ;;    
@@ -25,9 +26,11 @@ while getopts "i:v:K:L:P:a:b:c:d:e:f:g:h:j:n:u:A:" opt; do
     h) ENABLE_srf="$OPTARG" ;; 
     j) ENABLE_tmoe="$OPTARG" ;; 
     n) ENABLE_nosnap="$OPTARG" ;;
+    S) ENABLE_systemd257="$OPTARG" ;; # systemd 257 旧内核兼容
+    t) ENABLE_8gen2_wayland="$OPTARG" ;; # 修复骁龙8 Gen 2 Wayland 花屏
     u) USERNAME="$OPTARG" ;; 
     A) ENABLE_anland_kde="$OPTARG" ;; # anland_kde 支持
-    *) echo "用法: $0 -i <template.Dockerfile> [-v <version>]" ; exit 1 ;;
+    *) echo "用法: $0 -i <template.Dockerfile> [-v <version>] [-S <true|false>]" ; exit 1 ;;
   esac
 done
 
@@ -56,6 +59,8 @@ echo " 目标构建平台 : $PLATFORM"
 echo " 跨架构 : $ENABLE_binfmt"
 echo " 容器识别部分硬件和网络：$ENABLE_yj"
 echo " Ubuntu nosnap：$ENABLE_nosnap"
+echo " systemd 257 旧内核兼容：$ENABLE_systemd257"
+echo " 修复骁龙8 Gen 2 Wayland 花屏：$ENABLE_8gen2_wayland"
 echo "========================================================="
 
 # 1. 环境初始化（跨架构 QEMU 模式）
@@ -79,7 +84,14 @@ set -e
 
 # 3. 核心构建流程
 TEMP_TAR="custom-${PREFIX}-rootfs.tar"
-FINAL_NAME="${PREFIX}-Droidspaces-rootfs-${TARGET_ARCH}-${DATE}-${VERSION}.tar.xz"
+if [ "$BUILD_KDE" = "mobile" ]; then
+  DISPLAY_BACKEND="Mobile"
+elif [ "$ENABLE_anland_kde" = "true" ]; then
+  DISPLAY_BACKEND="Wayland"
+else
+  DISPLAY_BACKEND="X11"
+fi
+FINAL_NAME="${PREFIX}-${DISPLAY_BACKEND}-Droidspaces-rootfs-${TARGET_ARCH}-${VERSION}.tar.xz"
 
 echo "正在运行 Docker Buildx ($PLATFORM 跨架构模式)..."
 
@@ -100,7 +112,9 @@ docker buildx build \
   --build-arg ENABLE_srf_ARG="$ENABLE_srf" \
   --build-arg ENABLE_tmoe_ARG="$ENABLE_tmoe" \
   --build-arg ENABLE_nosnap_ARG="$ENABLE_nosnap" \
+  --build-arg ENABLE_systemd257_ARG="$ENABLE_systemd257" \
   --build-arg ENABLE_anland_kde_ARG="$ENABLE_anland_kde" \
+  --build-arg ENABLE_8gen2_wayland_ARG="$ENABLE_8gen2_wayland" \
   --build-arg USERNAME="$USERNAME" \
   -f "$DOCKERFILE" \
   .
